@@ -7,7 +7,7 @@ import math
 from bagofWords import timeit
 from nltk.stem import WordNetLemmatizer
 from nltk.stem import PorterStemmer
-
+from nltk import bigrams
 
 def normalizeVector(vector):
     """
@@ -90,13 +90,24 @@ def vectorize(sentTokens, vocab, showDebugInfo=True):
 
 
 @timeit
-def collectData(nTopReviews=1000):
+def collectData(nTopReviews=10, computeBigram = False):
+    """
+    Collect data from corpus. Form vocab. Stemming and stopword removal
+    :return : listOfText, vocab
+    """
+
+    # stopword collection
+    stopwordString = " - , . '  : of and a the to is s it that ( ) as film with for hi thi i he but be on movi are t by one an who habe you from at wa they ha her all charact there ? so out about up what"
+    stopword = stopwordString.split(" ")
+    stopword.append('"')
+
     # Initialize stemmer and lemmatizer
     lemmatizer = WordNetLemmatizer()
     stemmer = PorterStemmer()
 
     # Read all the movie review data from two folders pos and neg
     category = (movie_reviews.categories())
+    global  documents
     documents = []
     for category in movie_reviews.categories():
         for file in movie_reviews.fileids(category):
@@ -104,26 +115,79 @@ def collectData(nTopReviews=1000):
             reviewProcessed = [stemmer.stem(word) for word in review]
             documents.append((reviewProcessed, category))
 
+    print("Read reviews from database")
     # Shuffle movie review order so that pos and neg reviews are interspersed
     random.shuffle(documents)
+
+    if nTopReviews > len(documents):
+        nTopReviews = len(documents) - 1
 
     listOfReviews = []
     vocab = []
     for review, rating in documents[:nTopReviews]:
-        listOfReviews.append(review)
-        vocab = vocab + list(set(review))
+        try:
+            listOfReviews.append(review)
+            vocab = vocab + list(review)
+        except:
+            print("Probably I devoured all the reviews")
 
     # Sorting and set operation to obtain vocab of corpus
-    vocab = sorted(list(set(vocab)))
-    print(len(vocab))
+    print("Unprocessed Corpus Size : ", len(vocab))
+
+    # Count word frequency to remove rare words from vocab and corpus
+    counts = (Counter(vocab))
+
+    vocab = list(set(vocab))
+    print("Vocabulary size : ", len(vocab))
+
+    # Add one time occuring word to stopword list
+    oneTimeWords = [key for key in counts if counts[key] == 1]
+    stopword = stopword + oneTimeWords
+
+    # Filter stopwords and rare words from vocab
+    vocab = [word for word in vocab if word not in stopword]
+    print("Vocabulary size after removing rare words: ", len(vocab))
+
+    # Filter stopwords and rare words from text / reviews
+    listOfReviewsStopworFiltered = []
+    totalNoWords = 0
+    vocabBigram = []
+    for sent in listOfReviews:
+        sentStopwordFiltered = [ word for word in sent if word not in stopword]
+
+        if computeBigram:
+            bigram = list(bigrams(sentStopwordFiltered))
+            sentStopwordFiltered = sentStopwordFiltered + bigram
+            vocabBigram = vocabBigram + bigram
+
+        listOfReviewsStopworFiltered.append(sentStopwordFiltered)
+        totalNoWords = totalNoWords + len(sentStopwordFiltered)
+
+    if computeBigram:
+        vocab = vocab + list(set(vocabBigram))
+        print("Bigram Vocab Size : ", len(vocab))
+
+    listOfReviews = listOfReviewsStopworFiltered
+    print("New Corpus Size : ", totalNoWords)
+    return listOfReviews, vocab
+
+
+def trainAndTest(listOfReviews, vocab):
+    """
+    :param listOfReviews: list of text / emails / sentence / moview reviews
+    :param vocab: vocab of corpus
+    :return:
+    """
 
     # Obtaining TF IDF of movie reviews
     print("Now on to vectorizing")
-    tfidfVec = vectorize(listOfReviews[:nTopReviews], vocab, showDebugInfo=True)
+    # tfidfVec = vectorize(listOfReviews[:nTopReviews], vocab, showDebugInfo=True)
+    tfidfVec = vectorize(listOfReviews, vocab, showDebugInfo=True)
 
     # Getting feature, labels to train and test
     featureSets = []
-    for i in range(0, nTopReviews):
+    noOfReviews = len(listOfReviews)
+    for i in range(0, noOfReviews):
         vec = list(tfidfVec[i])
 
         feature = {}
@@ -134,15 +198,15 @@ def collectData(nTopReviews=1000):
         featureSets.append((feature, rating))
 
     # Dividing data into trainSet and testSet
-    trainingSet = featureSets[int(0.5 * nTopReviews):]
-    testSet = featureSets[:int(0.5 * nTopReviews)]
+    trainingSet = featureSets[int(0.5 * noOfReviews):]
+    testSet = featureSets[:int(0.5 * noOfReviews)]
 
     # Traingin classifer and testing accuracy
     classifier = nltk.NaiveBayesClassifier.train(trainingSet)
     accuracy = nltk.classify.accuracy(classifier, testSet) * 100
-
     print("Accuracy : {} %".format(accuracy))
 
 
 if __name__ == '__main__':
-    collectData()
+    listOfReviews, vocab = collectData(100, computeBigram=False)
+    trainAndTest(listOfReviews, vocab)
