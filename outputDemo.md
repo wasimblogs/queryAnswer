@@ -1,4 +1,4 @@
-Output Demo of Query Answering 
+Output Demo of Query Answering \n
 Implemented inserts of synonym of words in user query to paraphrase user query.
 
 
