@@ -1,13 +1,14 @@
 import nltk
 from nltk.tokenize import WordPunctTokenizer
 from nltk.tokenize import PunktSentenceTokenizer
-from nltk.stem import WordNetLemmatizer
+from nltk.stem import WordNetLemmatizer, PorterStemmer
 from nltk.corpus import stopwords
 import numpy as np
 import math
 from nltk.util import ngrams
 import time  # used to time profile methods
 from nltk.corpus import wordnet
+from collections import Counter
 
 """
 Objective : To find the best match for a given question.
@@ -19,20 +20,21 @@ Things noticed and things to treat with caution
 - Deal with user queries containing synonyms
 - Use the best lemmatizer / stemmer
 - Use consistent preprocessing for everything
-- Reduce use of global variables
+- Use of global variables sparingly
 """
 
 # Stopword initialization
 stop = stopwords.words('english')
-addStopwords = "? - / . , ' ) ( ;"
+addStopwords = "? - / . \, , ' ’) ( ; the \" \, ,\" said \" \' r \“ “ ’ : ,” ') "
 addStopwords = addStopwords.split(" ")
 stop = stop + addStopwords
+stop.append('the')
 
 # Initialization of sentence tokenizer, word tokenizer, lemmatizer, stopword filter
 sentTokenizer = PunktSentenceTokenizer()
 wordTokenizer = WordPunctTokenizer()
 lemmatizer = WordNetLemmatizer()
-
+stemmer = PorterStemmer()
 
 def timeit(method):
     """
@@ -183,7 +185,7 @@ def vectorize(sentTokens, vocab, showDebugInfo=True):
 
 
 @timeit
-def tfidf(count, presence):
+def tfidf(count, presence, vocab):
     """
     # Compute Term Frequency Inverse Document Frequency for given corpus
 
@@ -193,8 +195,8 @@ def tfidf(count, presence):
     """
 
     # Initialize paramters for TF IDF calculation
-    global idfVec, tfidfVec
     tfidfVec = np.zeros_like(count)
+    global idfVec
     idfVec = np.zeros_like(presence)
 
     row, col = len(count), len(count[0])
@@ -222,7 +224,7 @@ def tfidf(count, presence):
     return tfidfVec
 
 
-def calcSynonyms(word):
+def calcSynonyms(word, vocab):
     """
     :param word: word for which synonym is to be calculated
     :return: list of synonym for the input word
@@ -230,23 +232,29 @@ def calcSynonyms(word):
 
     synonyms = []
 
+    # Compute synonym
     for syn in wordnet.synsets(word):
         for l in syn.lemmas():
             word = l.name()
             synonyms.append(word)
 
-    return list(set(synonyms))
+    # Consider only those synonyms that are present in vocabulary of the corpus
+    synonyms = [word for word in synonyms if word in vocab]
+    synonyms = list(set(synonyms))
+
+    return synonyms
 
 
-@timeit
-def findTopWords(tfidfVec, sentTokens, vocab, nTopWords=3, showDebugInfo=True):
-    """Finds the most important words in a sentence"""
+def findTopWords(tfidfVec, sentTokens, inputSentence, vocab, nTopWords=3, showDebugInfo=True):
+    """
+    Finds the most important words in a sentence
+    This module will phase out slowly in favor of nTopWordsinSentence
+    """
 
-    # inputQA is a global containing questions and answers
-    inputSentence = inputQA
+    print("No of sentences : ", len(inputSentence))
+    count = 0
 
-    for vector, sentence in zip(tfidfVec, inputSentence):
-        max = np.max(vector)
+    for vector, sentence, tokenizedSent in zip(tfidfVec, inputSentence, sentTokens):
         sortedVector = sorted(vector)
         sortedVector.reverse()
 
@@ -258,21 +266,56 @@ def findTopWords(tfidfVec, sentTokens, vocab, nTopWords=3, showDebugInfo=True):
             try:
                 index = listVector.index(maxScores[i])
                 result.append(vocab[index])
-                listVector[index] = 0
+                listVector[index] = 0  # Two words might have same score. So make scores 0 as you read them
             except:
                 print("Nan Found! Can't determine important words")
                 break
 
         if showDebugInfo:
-            print("\n\n", result, "----", sentence)
+            print("\n\n", count, "/", len(inputSentence), result, "----", sentence)
+            # print(tokenizedSent)
+
+        count += 1
 
 
-@timeit
-def preProcessSent(sentence, computeBigram=False, showDebugInfo=False, insertSynonym=True):
+def nTopWordsinSentence(tfidfVec, sentTokens, vocab, nTopWords=3, showDebugInfo=False):
+    """Returns n most important words in a sentence"""
+
+    sortedVector = sorted(tfidfVec)
+    sortedVector.reverse()
+
+    # Print n most important words in a sentence
+    maxScores = (sortedVector[:nTopWords])
+    nTopWordList = []
+    listVector = list(tfidfVec)
+
+    trueNLimit = [word for word in sentTokens if word in vocab]
+
+    for i in range(0, nTopWords):
+        try:
+            index = listVector.index(maxScores[i])
+            nTopWordList.append(vocab[index])
+            listVector[index] = 0  # Two words might have same score. So make scores 0 as you read them
+        except:
+            print("Nan Found! Can't determine important words")
+            break
+
+        # For those sentences that do not have as many important words as user asked for
+        if len(nTopWordList) == len(trueNLimit):
+            break
+
+    if showDebugInfo:
+        print("\n\n", len(sentTokens), nTopWordList , "----", sentTokens)
+        # print(tokenizedSent)
+
+    return nTopWordList
+
+
+def processQuery(sentence, vocab, computeBigram=False, showDebugInfo=False, insertSynonym=True):
     """
     To lower. Stop word removal. Lemmatize. Return lemmatized input
     :param sentence: input which needs to be preprocessed
-    :return: preprocessed sentence
+    :return: word tokens of sentence
     """
 
     # Lowercase
@@ -293,15 +336,14 @@ def preProcessSent(sentence, computeBigram=False, showDebugInfo=False, insertSyn
     if insertSynonym:
         synonyms = []
         for word in listOfWords:
-            syns = calcSynonyms(word)
+            syns = calcSynonyms(word, vocab)
             synonyms = synonyms + syns
 
         # Do not repeat synonyms
         synonyms = list(set(synonyms))
-        # Do not include synonyms that are not in vocab
-        synonyms = [word for word in synonyms if word in vocab]
+
         # Query containing synonyms of terms present in query
-        wordTokens = wordTokens + synonyms
+        wordTokens = list(set(wordTokens + synonyms))
 
     if showDebugInfo:
         print(wordTokens)
@@ -316,8 +358,7 @@ def userInput():
     pass
 
 
-@timeit
-def vectorizeUserQuery(wordTokens):
+def vectorizeUserQuery(wordTokens, vocab):
     """
     Vectorize user query and compute similarity with database questions
     :param wordTokens: tokenized user query
@@ -344,11 +385,9 @@ def vectorizeUserQuery(wordTokens):
     return freq
 
 
-def findSimilarSentence(queryVec, tfidfVecQuestion, tfidfAnwer, topNMatch=10):
+def findSimilarSentence(queryVec, tfidfVecQuestion, tfidfAnwer, inputSentence, topNMatch=10):
     # Compute Similarity score of input query with all queries in database
-
     # inputQuestion contains unprocsesed input from corpus
-    inputSentence = inputQuestion
 
     questionScores = []
     for vector in tfidfVecQuestion:
@@ -372,8 +411,9 @@ def findSimilarSentence(queryVec, tfidfVecQuestion, tfidfAnwer, topNMatch=10):
     finalScore.sort()
     finalScore.reverse()
 
+    print("Top {} matches : ".format(topNMatch))
     for score, index in finalScore:
-        print(i + 1, "\tBest matches : ", index, score, inputSentence[index])
+        print("Index : ", index, "score: %0.2f" % score, inputSentence[index])
 
 
 @timeit
@@ -433,7 +473,7 @@ def buildQAModel(corpus, showDebugInfo=False, computeBigram=False):
 
     print("1/4 - Computing vocabulary from corpus")
     vocab = vocabularyFromCorpus(corpus, showDebugInfo=showDebugInfo,
-                                                        computeBigram=computeBigram)
+                                 computeBigram=computeBigram)
 
     # Needs work here
     sentTokenizedFiltered = tokenizeIntoWords(corpus)
@@ -448,34 +488,43 @@ def buildQAModel(corpus, showDebugInfo=False, computeBigram=False):
     findTopWords(tfidfVec, sentTokenizedFiltered, vocab, 3, showDebugInfo=True)
 
 
-def qaPipeline():
+def qaPipeline(computeBigram=False, insertSynonym=False):
     """
     First finds set of similar questions and then evaluates their answer to find the best query match
     :return: best answer for the given query
     """
-    stringAnswer, inputAnswer = readCorpus("ncellanswer.txt")
-    vocabAnswer = vocabularyFromCorpus(inputAnswer, computeBigram=False, showDebugInfo=True)
 
+    # Answer
+    stringAnswer, inputAnswer = readCorpus("ncellanswer.txt")
+    vocabAnswer = vocabularyFromCorpus(inputAnswer, computeBigram=computeBigram, showDebugInfo=True)
+
+    # Question
+    vocabQuestion, inputQuestion = [], []
     stringQuestion, inputQuestion = readCorpus("ncellfaq.txt")
     inputQuestion = stringQuestion.split("\n")
-    vocabQuestion = vocabularyFromCorpus(inputQuestion, computeBigram=False, showDebugInfo=True)
+    vocabQuestion = vocabularyFromCorpus(inputQuestion, computeBigram=computeBigram, showDebugInfo=True)
 
+    # QA
     vocab = list(set(vocabQuestion + vocabAnswer))
-    inputQA = inputQuestion + inputAnswer
-    global vocab, inputQA, inputQuestion
+    inputSentence = inputQuestion + inputAnswer
+    tokenizedSentence = tokenizeIntoWords(inputSentence)
 
-    tokenizedInput = tokenizeIntoWords(inputQA)
-    count, presence = vectorize(tokenizedInput, vocab)
+    # Vectorize or Document to matrix
+    count, presence = vectorize(tokenizedSentence, vocab)
 
-    corpusSize = 0
-    for sentence, vec in zip(tokenizedInput, count):
-        corpusSize += len(sentence)
-        # print("Sentence Len : ", np.sum(vec))
-
-    tfidfVec = tfidf(count, presence)
+    # TF IDF
+    tfidfVec = tfidf(count, presence, vocab)
     tfidfVecQuestion = tfidfVec[:len(inputQuestion)]
     tfidfVecAnswer = tfidfVec[len(inputQuestion):]
-    # findTopWords(tfidfVec, tokenizedInput, vocab)
+
+    # # Checking if sentences are tokenized properly
+    # for tSent, sent in zip(tokenizedSentence, inputSentence):
+    #     print("->> ", tSent)
+    #     print("->>", sent)
+    #     print("\n\n", "*" * 40)
+
+    # Make sure you're sending tokenized and unprocessed sentence of same sentence
+    # findTopWords(tfidfVec=tfidfVec, sentTokens=tokenizedSentence, inputSentence=inputSentence, vocab=vocab)
 
     queries = [
         "How to activate 4G?",
@@ -488,12 +537,97 @@ def qaPipeline():
         "I get busy all the time ringtone?"]
 
     for query in queries:
-        processedQuery = preProcessSent(query, computeBigram=False)
-        queryVec = vectorizeUserQuery(processedQuery)
-        print("\n\n", "*" * 60, "\n\nQuestion : ", query, "\nMatches...")
-        findSimilarSentence(queryVec, tfidfVecQuestion, tfidfVecAnswer)
+        processedQuery = processQuery(query, vocab, computeBigram=computeBigram, insertSynonym=insertSynonym)
+        queryVec = vectorizeUserQuery(processedQuery, vocab)
+        print("\n\n", "*" * 60, "\n\nQuestion : ", query)
+        findSimilarSentence(queryVec, tfidfVecQuestion, tfidfVecAnswer, inputSentence=inputSentence, topNMatch=3)
+
+
+def qaPipelineBaseCorpus(computeBigram=False, insertSynonym=False):
+    """
+    First finds set of similar questions and then evaluates their answer to find the best query match
+    :return: best answer for the given query
+    """
+
+    # Base file which contains every information about a site except the QA pair
+    inputBase = readBaseCorpus("ncell.txt")
+    vocabBase = vocabularyFromCorpus(inputBase, computeBigram=computeBigram, showDebugInfo=True)
+
+    # Answer
+    stringAnswer, inputAnswer = readCorpus("ncellanswer.txt")
+    vocabAnswer = vocabularyFromCorpus(inputAnswer, computeBigram=computeBigram, showDebugInfo=True)
+
+    # Question
+    vocabQuestion, inputQuestion = [], []
+    stringQuestion, inputQuestion = readCorpus("ncellfaq.txt")
+    inputQuestion = stringQuestion.split("\n")
+    vocabQuestion = vocabularyFromCorpus(inputQuestion, computeBigram=computeBigram, showDebugInfo=True)
+
+    # QA
+    vocab = list(set(vocabQuestion + vocabBase + vocabAnswer))
+    inputSentence = inputQuestion + inputBase + inputAnswer
+    tokenizedSentence = tokenizeIntoWords(inputSentence)
+
+    # Vectorize or Document to matrix
+    count, presence = vectorize(tokenizedSentence, vocab)
+
+    # TF IDF
+    tfidfVec = tfidf(count, presence, vocab)
+    tfidfVecQuestion = tfidfVec[:len(inputQuestion)]
+    tfidfVecAnswer = tfidfVec[-1 * len(inputQuestion):]
+
+    # # Checking if sentences are tokenized properly
+    # for tSent, sent in zip(tokenizedSentence, inputSentence):
+    #     print("->> ", tSent)
+    #     print("->>", sent)
+    #     print("\n\n", "*" * 40)
+
+    # # Make sure you're sending tokenized and unprocessed sentence of same sentence
+    # findTopWords(tfidfVec=tfidfVec, sentTokens=tokenizedSentence, inputSentence=inputSentence, vocab=vocab)
+
+    queries = [
+        "How to activate 4G?",
+        "What are cities with 4G network coverage?",
+        "Do you sell phones?",
+        "Where can I buy ringtone?",
+        "What happens if I lose my SIM card?",
+        "What is the difference between 4G and 3G sim card?",
+        "What is the difference between tariffs of 3G and 4G sim card?",
+        "I get busy all the time ringtone?"]
+
+    inputSentence = inputQuestion + inputAnswer
+    for query in queries:
+        processedQuery = processQuery(query, vocab, computeBigram=computeBigram, insertSynonym=insertSynonym)
+        queryVec = vectorizeUserQuery(processedQuery, vocab)
+        print("\n\n", "*" * 60, "\n\nQuestion : ", query)
+        importantWords = nTopWordsinSentence(queryVec, sentTokens=processedQuery, vocab=vocab, nTopWords=5)
+        print("Keywords : ", importantWords)
+        findSimilarSentence(queryVec, tfidfVecQuestion, tfidfVecAnswer, inputSentence=inputQuestion, topNMatch=3)
+
+
+def readBaseCorpus(filename="ncell.txt"):
+    """
+    :param filename: filename containing base corpus. Base corpus is used to normalize word importance. It contains
+    all the text in a website. 
+    :return: list of sentences
+    """
+    with open(filename) as file:
+        string = ""
+        for line in file:
+            if len(line) > 20:  # store the sentence only if its' len is greater than 20
+                string += line
+
+    # Tokenize string into sentence
+    sentences = sentTokenizer.tokenize(string)
+
+    # for sentence in sentences:
+    #     print("*",sentence)
+
+    return sentences
 
 
 if __name__ == "__main__":
-    qaPipeline()
+    # qaPipeline()
+    # qaPipeline(computeBigram=False, insertSynonym=True)
+    qaPipelineBaseCorpus(computeBigram=False, insertSynonym=True)
     pass
