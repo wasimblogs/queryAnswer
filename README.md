@@ -14,3 +14,6 @@ Design choices that affects Query Answering capabilities of a QA system
 
 Database
 Quora question pair sets can be downloaded from :http://qim.ec.quoracdn.net/quora_duplicate_questions.tsv
+
+Installation:
+- Requires NLTK only
