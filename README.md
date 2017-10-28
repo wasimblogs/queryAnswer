@@ -12,8 +12,10 @@ Design choices that affects Query Answering capabilities of a QA system
 - Syntatic Parsing of sentences to uncover relations between words
 - Named entity recognition and Noun Phrase extraction
 
+
 Database
 Quora question pair sets can be downloaded from :http://qim.ec.quoracdn.net/quora_duplicate_questions.tsv
+
 
 Installation:
 - Requires NLTK only
